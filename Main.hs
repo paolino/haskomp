@@ -27,7 +27,8 @@ notes ps r =  concat (zipWith note ps (scanl (\(_,k) y -> (y,k+y)) (0,0) $ flatt
   note k (x,y) = [E (N 0 k (floor $ (sqrt(sqrt x)*128)) 0.17) y]
 
 -- phrase editing state
-newtype Strength = Strength Double deriving Read
+newtype Strength = Strength Double deriving (Read, Show)
+
 
 data TransS = TransS {
   _tag :: Key,
@@ -59,7 +60,7 @@ transProj :: TransS -> E a -> E a
 transProj t = projectE (Linear ((view width t) +1) (view shift t))
 
 transEvents :: Events -> Offset -> TransS -> Events
-transEvents xs k t = over traverse (transProj t) . over (traverse . event) (modifyVelOn (floor . (*128) . (* view strength t) . (/128) . fromIntegral ) . offset (fromOffset k `mod` 12)) $ xs
+transEvents xs k t = over traverse (transProj t) . over (traverse . event) (modifyVelOn (floor . (*128) . (* view strength t) . (/128) . fromIntegral ) . offset (fromOffset k) 12) $ xs
 
 fullEvents :: PhraseS -> [(Key,Events)]
 fullEvents s = map (\(k,t) -> (view tag t,transEvents (view phrase s) k t)) (filter (not . view mute . snd) . view assoc $ s)
@@ -71,17 +72,26 @@ data Editing  = New  -- new phrase
         | Stop Offset -- stop all playing for the given transposition
         | Kill -- stop the editing ?
         | DoNothing  -- boo hack
-        | Shift Double -- set the time shift
-        | Width Double -- correct the time width
-        | Save deriving Read
+        | Shift Offset Double -- set the time shift
+        | Width Offset Double -- correct the time width
+        | Save deriving (Read, Show)
 
 -- midi events to language, hard coded!, fix me
 midi2L :: NE -> Editing
-midi2L (On _ n v) = Play (Strength $ fromIntegral v/128) $ Offset n 
-midi2L (Off _ n) = Stop $ Offset n 
-midi2L (Control _ 1 0) = New
-midi2L (Control _ 16 v) = Shift (fromIntegral v/128)
-midi2L (Control _ 17 v) = Width (fromIntegral v/128)
+midi2L (On _ n v) = 
+  if n >=9 && n <=12 then Play (Strength $ fromIntegral v/128) $ Offset (n - 9)
+  else 
+  if n >=25 && n <=28 then Play (Strength $ fromIntegral v/128) $ Offset (n - 21) else DoNothing
+midi2L (Off _ n) =   
+  if n >=9 && n <=12 then Stop $ Offset (n - 9)
+  else 
+  if n >=25 && n <=28 then Stop $ Offset (n - 21) else DoNothing
+midi2L (Control _ 114 127) = New
+midi2L (Control _ k v) = 
+  if k >= 21 && k <= 28 then  Shift (Offset $ k - 21) (fromIntegral v/128)
+  else if k >= 41 && k <= 48 then  Width (Offset $ k - 41) (fromIntegral v/128)
+  else DoNothing
+
 midi2L _ = DoNothing
 
 flipset t s p = set t p s
@@ -129,42 +139,37 @@ edit new save int s' (Stop o) = do
 edit new save int s Kill = 
     atomically (resetI int) >> return bootPhraseS
 
-edit new save int s@(view assoc -> as) (Shift sh) = do
-    let s' = maybe s (flipset assoc s) $ do   
-          o <- view stack s
-          return $ over (assocLens o) (fmap $ set shift sh) as
-    print (length $ view assoc s')
+edit new save int s (Shift o sh) = do
+    let s' = over (assoc . assocLens o) (fmap $ set shift sh) s
     reset int s'
     return s'
 
-edit new save int s@(view assoc -> as) (Width w) = do
-    let s' = maybe s (flipset assoc s) $ do   
-          o <- view stack s
-          t <- set width w <$> lookup o as
-          return $ updateAssoc o t as
+edit new save int s (Width o w) = do
+    let s' = over (assoc . assocLens o) (fmap $ set width w) s
     reset int s'
     return s'
-
 edit new save _ s Save = 
   save (concatMap snd . fullEvents $ s) >> return s
 
+edit _ _ _ s DoNothing = print s >> return s
 edit _ _ _ s _ = return s
 
 
 
 -- hard coded, fix me
-new = fmap concat . replicateM 4 $ liftM2 notes (stream $ (replicate 18 0) ++ [36..47]) $ randomSubd 5 [1,1,1,1,1,2,2,2,2,2]
+new = fmap concat . replicateM 4 $ liftM2 notes (stream $ (replicate 12 0) ++ [36..47]) $ randomSubd 5 [1,1,1,1,1,2,2,2,2,2]
 
 
 
 main = do
-   t <- newTVarIO $ Tempus 125 4 16
+   t <- newTVarIO $ Tempus 125 16
    store <- newTChanIO
    ne <- newTChanIO 
    i <- midiUp (readTVar t) ne
    keyb <- newTChanIO
    let loop s = do
         a <- atomically $ readTChan keyb `orElse` (midi2L <$> readTChan ne)
+        print a
         edit new (atomically . writeTChan store) i s a >>= loop
    forkIO $ loop bootPhraseS
    forkIO . forever $ atomically (readTChan store) >>= print

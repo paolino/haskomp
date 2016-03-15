@@ -104,8 +104,7 @@ mkInterface tb tt = do
 -- timing environment
 data Tempus = Tempus {
   bpm :: Int, -- beats per minute
-  bar :: Int, -- number of beats in the bar
-  subd :: Int -- overall number of subdivisions, quantization
+  lines :: Int -- number of lines, quantization
   }
 
 parseNote :: NE -> Data
@@ -129,14 +128,17 @@ controller tt tb = do
     tti <- newTVarIO 0
     let s schedule = 
           let go n  = do
-                Tempus bpm bar subd <- atomically tt
-                let   q = fromIntegral bar / fromIntegral subd * 60 / fromIntegral bpm
-                      c = q * fromIntegral n
-                      m = n `mod` subd
-                      d = q * fromIntegral m
-                atomically $ writeTVar tti $ (fromIntegral (m + 1)/fromIntegral subd) 
+                Tempus bpm lines <- atomically tt
+                let   q = 15 / fromIntegral bpm
+                      c = q * fromIntegral n -- absolute quantized time
+                      m = n `mod` lines
+                      d = q * fromIntegral m  -- relative
+                      w0 = fromIntegral m / fromIntegral lines -- normalized window start
+                      w1 = fromIntegral (m + 1) / fromIntegral lines -- normalized window ends
+
+                atomically $ writeTVar tti w1 -- expose next deadline
                 sleepThreadUntil $ c + t0 
-                xs <- map parseNote <$> pickBoard (Span (fromIntegral m/fromIntegral subd) (fromIntegral (m + 1)/fromIntegral subd)) <$> map snd <$> atomically tb
+                xs <- map parseNote <$> pickBoard (Span w0 w1) <$> map snd <$> atomically tb
                 schedule xs (d + q)
                 go (n + 1) 
             in go 0
@@ -153,9 +155,6 @@ midiUp tt cn = do
     ($ killThread t) <$> atomically (mkInterface tb tti) 
     
   
-
-   
-
   
 
 

@@ -9,7 +9,7 @@ You need haskell and cabal, and be on linux with snd-seq (alsa)
 
 ## What you get
 
-One input midi port in jack, where the program listens to notesand 3 controls.
+One input midi port in jack, where the program listens to notes and 3 controls.
 
 One output midi port playing at 125 bpm a loop of 16 lines.
 
