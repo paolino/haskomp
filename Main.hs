@@ -17,7 +17,7 @@ import Control.Concurrent
 import Midi 
 import Subd
 import Score 
-
+import Data.List (partition)
 
 -- zipping pitches and rythm to events
 notes :: [Int] -> Subd -> Events
@@ -81,11 +81,11 @@ midi2L :: NE -> Editing
 midi2L (On _ n v) = 
   if n >=9 && n <=12 then Play (Strength $ fromIntegral v/128) $ Offset (n - 9)
   else 
-  if n >=25 && n <=28 then Play (Strength $ fromIntegral v/128) $ Offset (n - 21) else DoNothing
+  if n >=25 && n <=28 then Play (Strength $ fromIntegral v/128) $ Offset (n - 21) else Play (Strength $ fromIntegral v/128) $ Offset (n) 
 midi2L (Off _ n) =   
   if n >=9 && n <=12 then Stop $ Offset (n - 9)
   else 
-  if n >=25 && n <=28 then Stop $ Offset (n - 21) else DoNothing
+  if n >=25 && n <=28 then Stop $ Offset (n - 21) else Stop $ Offset (n) 
 midi2L (Control _ 114 127) = New
 midi2L (Control _ k v) = 
   if k >= 21 && k <= 28 then  Shift (Offset $ k - 21) (fromIntegral v/128)
@@ -101,6 +101,10 @@ updateAssoc o t =  (((o,t):) . filter ((/=) o . fst))
 assocLens i = lens (lookup i) (flip t) where
   t (Just v) = (:) (i,v) . filter ((/=) i . fst) 
   t Nothing = filter ((/=) i . fst)
+assocLensN f = lens (map snd . filter (f . fst)) (flip t) where
+  t vs xs = let 
+     (ys,zs) = partition (f . fst) xs
+     in zipWith (\(i,_) v -> (i,v)) ys vs ++ zs
 
 reset :: Interface -> PhraseS -> IO ()
 reset int s = atomically $ do
@@ -138,14 +142,13 @@ edit new save int s' (Stop o) = do
     
 edit new save int s Kill = 
     atomically (resetI int) >> return bootPhraseS
-
-edit new save int s (Shift o sh) = do
-    let s' = over (assoc . assocLens o) (fmap $ set shift sh) s
+edit new save int s (Shift (Offset o) sh) = do
+    let s' = over (assoc . assocLensN (\(Offset o') -> o' `mod` 8 == o)) (fmap $ set shift sh) s
     reset int s'
     return s'
 
-edit new save int s (Width o w) = do
-    let s' = over (assoc . assocLens o) (fmap $ set width w) s
+edit new save int s (Width (Offset o) w) = do
+    let s' = over (assoc . assocLensN (\(Offset o') -> o' `mod` 8 == o)) (fmap $ set width w) s
     reset int s'
     return s'
 edit new save _ s Save = 
@@ -157,12 +160,11 @@ edit _ _ _ s _ = return s
 
 
 -- hard coded, fix me
-new = fmap concat . replicateM 4 $ liftM2 notes (stream $ (replicate 12 0) ++ [36..47]) $ randomSubd 5 [1,1,1,1,1,2,2,2,2,2]
-
+new = fmap concat . replicateM 4 $ liftM2 notes (stream $ (replicate 200 0) ++ [36..47]) $ randomSubd 3 [1..5]
 
 
 main = do
-   t <- newTVarIO $ Tempus 125 16
+   t <- newTVarIO $ Tempus 125 4
    store <- newTChanIO
    ne <- newTChanIO 
    i <- midiUp (readTVar t) ne
